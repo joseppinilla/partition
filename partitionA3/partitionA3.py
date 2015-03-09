@@ -1,17 +1,19 @@
 import time
 import sys
 import getopt
-import placerGUI
+import partitionGUI
 import random
 import math
+import bisect
 import numpy as np
 import Tkinter as tk
 import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2TkAgg
+from _bisect import bisect_left
 
 
-class Placer():
+class Partition():
     """ Circuit Cell placement using Simulated Annealing
         Circuit: A representation of a circuit by Cells to be placed in rows and columns of Sites
         Cell: Circuit component represented as a Graph node with connections to other Cells as edges
@@ -31,8 +33,19 @@ class Placer():
         #================Create Data Structures================# 
         # Array of Line objects to draw connections
         self.connLines = []
-        # Array of Block objects drawing the rectangles for each site on the circuit, tracks occupancy
-        self.sites = []
+        # Array of Block objects drawing the rectangles for each site on the circuit, tracks occupancy.
+        # One per partition 
+        self.sitesA = []
+        self.blocksA = []
+        self.sitesB = []
+        self.blocksB = []
+        
+        # Stack of Unlocked Nodes
+        self.unlkStack = []
+        
+        # List of Nodes sorted by gains
+        self.gainOrder = []
+        
         # Array of Text objects noting the name of the node assigned to a cell site 
         self.tags = []
         # Assign Initial Temperature
@@ -49,7 +62,7 @@ class Placer():
             self.running = True
             self.start_timer = time.clock()
             # Simulated Annelaing Function
-            self._startplacement(True)
+            self._startpartition(True)
             sys.exit()
 
     def getGraph(self, fin):
@@ -77,13 +90,16 @@ class Placer():
         for node in self.G.nodes():
             self.G.node[node]["nets"]=[]
             self.G.node[node]["cost"]=0
+            self.G.node[node]["gain"]=0
+            self.G.node[node]["cutCost"]=0
+            self.G.node[node]["locked"]=False
             
         # For every Net, add edges between corresponding nodes
         for net in range(0,self.conns):
             tmpList = fin.readline().split()
             numNodes = int(tmpList[0])
             srcNode = int(tmpList[1])
-            self.G.node[srcNode]["nets"].append(srcNode)
+            #self.G.node[srcNode]["nets"].append(srcNode)
             for conn in range(2,numNodes+1):
                 self.G.add_edge(srcNode, int(tmpList[conn]))
                 self.G.node[int(tmpList[conn])]["nets"].append(srcNode)
@@ -135,21 +151,28 @@ class Placer():
         ckt_max_y = (ckt_max_x*(self.rows))/self.cols
         scale_x = round(ckt_max_x / self.cols)
         scale_y = round(ckt_max_y / self.rows)
-        self.canvasCirkt = tk.Canvas(self.master,width=ckt_max_x,height=(ckt_max_y*2)+int(scale_y))
+        self.canvasCirkt = tk.Canvas(self.master,width=ckt_max_x+scale_x,height=(ckt_max_y*2)+int(scale_y))
         self.canvasCirkt.grid(row=1,column=1,columnspan=4)
 
         # Draw border
-        self.canvasCirkt.create_rectangle(1, 1, ckt_max_x, (ckt_max_y*2)+int(scale_y))
+        self.canvasCirkt.create_rectangle(1, 1, (ckt_max_x+2)/2, (ckt_max_y*2)+int(scale_y))
+        self.canvasCirkt.create_rectangle(((ckt_max_x+2)/2)+scale_x, 1, ckt_max_x+scale_x, (ckt_max_y*2)+int(scale_y))
         
-        # Draw cell rows spaced by routing channels
+        # Draw cell rows and columns in two groups
         blockIndex=0
         for cut in range(int(scale_y), int(ckt_max_y*2), int(scale_y)*2):
             for cut2 in range(1, int(ckt_max_x), int(scale_x)):
+                if (cut2>ckt_max_x/2):
+                    cut2+=scale_x
                 # Coordinates for top and bottom points of rectangle
                 points = (cut2, cut, cut2+scale_x-1, cut+scale_y)
-                blockObj = placerGUI.Block(self.canvasCirkt,points,blockIndex,self.rows,self.cols)
+                blockObj = partitionGUI.Block(self.canvasCirkt,points,blockIndex,self.rows,self.cols)
                 blockIndex+=1
-                self.sites.append(blockObj)
+                if (cut2>ckt_max_x/2):
+                    self.blocksB.append(blockObj)
+                else:
+                    self.blocksA.append(blockObj)
+                    
                 
         #===================================Draw Plots================================#
         # Draw Figure for 2 subplots (Connections Graph and Cost Function)        
@@ -211,10 +234,10 @@ class Placer():
         if (self.firstRun):
             self.start_timer = time.clock()
         # Simulated Annelaing Function
-        self._startplacement(False)
+        self._startpartition(False)
         # Always display result at the end of the process
         self.updateDraw()
-        self.updatePlot(self.totalCost)
+        #self.updatePlot() #TODO: What to plot
         # Disable Buttons when finished
         self.pause_button['state'] = 'disabled'
         self.plot_button['state'] = 'disabled'
@@ -226,63 +249,112 @@ class Placer():
         self.pause_button['state'] = 'disabled'
         self.running = False
         
-    def _startplacement(self,quietMode):
-        """ Start Simulated Annealing Process """
+    def _startpartition(self,quietMode):
+        """ Start Partitioning Process """
         
         # On first run to random placement. This allows pausing and continuing the process
         if (self.firstRun == True):
-            self.randPlace()
-            self.cost()
-            self.oldCost = self.totalCost 
+            self.splitPlace()
+            self.gain()
             self.firstRun=False
+            self.cutCost()
         
+                
         # If user selects drawing circuit
         if not quietMode:
-            self.drawConns()
-            self.drawTags()
-            self.updatePlot(self.oldCost)
+            #self.drawConns() #TODO: Only at the end
+            #self.drawTags() #TODO: Only at the end
+            #self.updatePlot() #TODO: What to plot
+            pass
         
-        print "Inital Cost ", self.totalCost        
-        #========================Simulated Annealing========================#
-        while (self.T>0.1):
+        
+        
+#         for    a    small    number    of    passes    {    
+#             unlock    all    nodes    
+#             while    some    nodes    are    unlocked    {    
+#                 calculate    all    gains    
+#                 choose    node    with    highest    gain    whose        
+#                 movement    would    not    cause an imbalance    
+#                move    node    to    other    block    and    lock    it    
+#             }    
+#             choose    best    cut    seen    in    this    pass    
+#        }
 
-            if (not self.running):
-                return            
-            
-            self.k = self.k+5
-            
-            for i in range(0,self.k):
-                
-                swapCell, swapSite, swapTgtCell = self.swapWinRand()
-                               
-                self.incrCost(swapCell,swapTgtCell)
-                                  
-                newCost = self.totalCost
-                
-                deltaNCost = (newCost - self.oldCost)
-                if deltaNCost>0:              
-                    if (random.random() > math.exp(-deltaNCost/self.T)):                   
-                        # Revert move  
-                        self.swap(swapCell,swapSite)
-                        # Revert Cost
-                        self.incrCost(swapCell,swapTgtCell)
-                        continue
 
-                # Take move
-                self.oldCost = newCost                    
-                       
-            if not quietMode:
-                if (self.drawing):
-                    self.updateDraw()
-                if (self.plot):
-                    self.updatePlot(self.oldCost)
+        
+        self.FMPartition()
+        
+        
+          
+        
+        
+        
+        
+    def FMPartition(self):
+        
+        i=1
+        
+        #TODO: For loop
+        
+        
+        difParts = -1
+
+        # While difference means the move will unbalance partitions        
+        while not (2>=difParts>=0):
+            moveNode = self.gainOrder[self.cells-i][1]
+            print "MAX ", moveNode
+            moveNodePart = self.G.node[moveNode]["part"]
             
-            self.T=0.99*self.T
+            if self.G.node[moveNode]["locked"]:
+                pass
+            #TODO: Is it locked?
+        
+            if moveNodePart == 'A':
+                movePartSites = self.sitesA
+                tgtPartSites = self.sitesB
+                tgtPart = 'B'
+            else: 
+                movePartSites = self.sitesB
+                tgtPartSites = self.sitesA
+                tgtPart = 'A'
+        
+            # Difference on the number of cells on each site
+            difParts = len(movePartSites)-len(tgtPartSites) #TODO: Change for incremental size for performance 
+            print difParts
+            i+=1
+        
             
-        print "Final Cost ", self.totalCost
-        # Append result to results file
-        with open("results.txt", "a") as outputfile:
-            outputfile.write(str(self.totalCost) + "\n")
+        movePartSites.remove(moveNode)
+        tgtPartSites.append(moveNode)
+        self.G.node[moveNode]["part"] = tgtPart
+        print "WAS MOVED"
+        self.incrGain(moveNode)
+                    
+        
+        
+        
+    def cutCost(self):
+        
+        self.totalCutCost = 0 
+        
+        for node in self.G.nodes():
+            
+            nodePart = self.G.node[node]["part"]
+            
+            for nb in self.G.neighbors(node):
+                if self.G.node[nb]["part"]!=nodePart:
+                    self.totalCutCost+=1
+                    self.G.node[node]["cutCost"] = 1
+                    break
+            
+            
+            
+                        
+        print "Initial cost ", self.totalCutCost    
+
+
+    def cutIncrCost(self):
+        pass #TODO:
            
     def swapWinRand(self):
         """ Select Random Cell and swap into Random Site  """
@@ -357,19 +429,54 @@ class Placer():
         self.canvasPlot.draw()
         self.canvasPlot.flush_events()
 
+
+    def splitPlace(self):
+        """ SPlit placement, for every node a Partition is assigned """
+        # Start placement on Partition A
+        partA = True
+        for node in self.G.nodes():
+                                   
+            if partA:
+                self.sitesA.append(node)
+                self.G.node[node]["part"] = 'A'
+            else:
+                self.sitesB.append(node)
+                self.G.node[node]["part"] = 'B'
+            
+            self.unlkStack.append(node)
+            # Toggle partition for next placement
+            partA = not partA
+
+        
+
     def randPlace(self):
         """ Random placement, for every node a Site is assigned """
         random.seed(self.seed)
         
+        # Start placement on Partition A
+        partA = True
         for node in self.G.nodes():
-            randSite = random.randint(0,self.sitesNum-1)
             
-            while (self.sites[randSite].isOcp()):
-                randSite = random.randint(0,self.cells)    
+            randSite = random.randint(0,int(self.sitesNum/2)-1)
             
-            self.sites[randSite].setCell(node)
-            self.G.node[node]["site"] = self.sites[randSite]
-                                    
+            if partA:
+                partSite = self.sitesA
+                self.G.node[node]["part"] = 'A'
+                
+            else:
+                partSite = self.sitesB
+                self.G.node[node]["part"] = 'B'
+                       
+            while (partSite[randSite].isOcp()):
+                randSite = random.randint(0,int(self.sitesNum/2)-1)    
+
+            partSite[randSite].setCell(node)
+            self.G.node[node]["site"] = partSite[randSite]
+            
+            # Toggle partition for next placement
+            partA = not partA
+                
+            
     def drawConns(self):
         """ Extract center point from each node and draw connection to other nodes """
         for node in self.G.nodes():
@@ -398,6 +505,72 @@ class Placer():
             self.canvasCirkt.delete(tag)
         self.canvasCirkt.update()
         
+    def gain(self):
+        """ Find the gain of every node by finding the difference between the number of nodes connected to that node on the same partition (retention force)
+        and the number of nodes connected that are on the other partition (moving force)"""
+               
+        for node in self.G.nodes():
+            # Get number of nodes connected on same and other partition
+            movForce, retForce = self.nodeForces(node)
+            nodeGain =  movForce-retForce
+            self.G.node[node]["gain"] = nodeGain #TODO: This one may not be necessary
+
+            #Fill list of Nodes with gains
+            self.gainOrder.append((nodeGain,node))
+       
+        self.gainOrder.sort(key=lambda r: r[0])
+        self.keys = [r[1] for r in self.gainOrder]        
+        
+        
+    def incrGain(self,movedNode):
+        
+        movedNets = set([movedNode])
+        movedNets.update(self.G.neighbors(movedNode))
+        movedNets.update(self.G.node[movedNode]["nets"])
+        
+        
+        print "NOW REMOVE"
+        for node in self.gainOrder:
+            print node
+        
+        print movedNets
+                
+        for movedNet in movedNets:
+            movForce, retForce = self.nodeForces(movedNet)
+            nodeGain =  movForce-retForce
+            self.G.node[movedNet]["gain"] = nodeGain #TODO: This one may not be necessary
+            del self.gainOrder[self.keys.index(movedNet)]
+            bisect.insort(self.gainOrder, (nodeGain,movedNet))
+            self.keys = [r[1] for r in self.gainOrder]
+            
+            
+        print "NOW REMOVE"
+        for node in self.gainOrder:
+            print node
+            
+    def nodeForces(self,node):
+        
+        nodePart = self.G.node[node]["part"]              
+        movForce = 0
+        retForce = 0
+        
+        
+        for nb in set(self.G.neighbors(node)):
+            if nodePart != self.G.node[nb]["part"]:
+                movForce+=1
+            else:
+                retForce+=1
+
+        connNodes = set(self.G.node[node]["nets"])
+               
+        for connNode in connNodes:           
+            if nodePart != self.G.node[connNode]["part"]:
+                movForce+=1
+            else:
+                retForce+=1
+
+        return movForce, retForce
+    
     def cost(self):
         """ Seeing the circuit as a matrix the distance units between sites can be found as the difference
         between their axis locations. 
@@ -483,6 +656,7 @@ def main(argv):
     temperature = 1
     seed = 30
     
+    
     try:
         opts, args = getopt.getopt(argv, "hqs:t:i:", ["ifile="])
     except getopt.GetoptError:
@@ -498,8 +672,6 @@ def main(argv):
         elif opt in ("-i", "--ifile"):
             inputfile = arg
             print "Read file " + inputfile
-        elif opt == '-t':
-            temperature = int(arg)
         elif opt == '-s':
             seed = int(arg)
         elif opt == "-q":
@@ -509,9 +681,9 @@ def main(argv):
         print 'test.py -i <inputfile>'
         sys.exit(2)
     
-    placer = Placer(root,temperature,seed,inputfile,quietMode)
+    partition = Partition(root,temperature,seed,inputfile,quietMode)
     root.wm_title("SA Placement Tool. EECE583: Jose Pinilla")
-    root.protocol('WM_DELETE_WINDOW', placer.quitApp)
+    root.protocol('WM_DELETE_WINDOW', partition.quitApp)
     root.resizable(False, False)
     root.mainloop()
 
