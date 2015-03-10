@@ -9,19 +9,21 @@ import numpy as np
 import Tkinter as tk
 import networkx as nx
 import matplotlib.pyplot as plt
+from operator import itemgetter
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2TkAgg
 from _bisect import bisect_left
+from time import sleep
 
 
 class Partition():
-    """ Circuit Cell placement using Simulated Annealing
-        Circuit: A representation of a circuit by Cells to be placed in rows and columns of Sites
+    """ Circuit Cell partitioning using Fiduccia-Matheyses
+        Circuit: A representation of a circuit by Cells to be partitioned in two sites
         Cell: Circuit component represented as a Graph node with connections to other Cells as edges
         Node: Graph representation of a Cell
         Site: Possible location for a Cell (Is Free or is occupied by a Cell)
         Block: Graphic representation and data of a Site
      """  
-    def __init__(self,master,T,seed,inputfile,quietMode):
+    def __init__(self,master,seed,inputfile,quietMode):
         
         #=============Parse file to create cells graph===============#
         # Create Directed Graph and fill with input file
@@ -40,16 +42,11 @@ class Partition():
         self.sitesB = []
         self.blocksB = []
         
-        # Stack of Unlocked Nodes
-        self.unlkStack = []
-        
         # List of Nodes sorted by gains
         self.gainOrder = []
         
         # Array of Text objects noting the name of the node assigned to a cell site 
         self.tags = []
-        # Assign Initial Temperature
-        self.T = T
         # Assign Initial Seed
         self.seed = seed
         #================Draw Buttons and plots================#
@@ -60,15 +57,14 @@ class Partition():
         # Quite Mode to run without graphics
         if quietMode:
             self.running = True
-            self.start_timer = time.clock()
-            # Simulated Annelaing Function
+            # FM Partitioning Algorithm
             self._startpartition(True)
             sys.exit()
 
     def getGraph(self, fin):
         """ Parse Input File to fill up Graph structure """
         tmpList = fin.readline().split()
-        # Number of Cells to be placed
+        # Number of Cells to be partitioned
         self.cells = int(tmpList[0])
         # Number of Connections or Nets
         self.conns = int(tmpList[1])
@@ -78,8 +74,6 @@ class Partition():
         self.cols =  int(tmpList[3])
         # Number of available sites in the Circuit
         self.sitesNum = self.rows*self.cols
-        # Annealing parameter is 10*N^(4/3). Where N is the number of cells to be placed
-        self.k = pow(self.cells,(4/3))
         
         
         self.winX = self.cols/4
@@ -90,7 +84,6 @@ class Partition():
         for node in self.G.nodes():
             self.G.node[node]["nets"]=[]
             self.G.node[node]["cost"]=0
-            self.G.node[node]["gain"]=0
             self.G.node[node]["cutCost"]=0
             self.G.node[node]["locked"]=False
             
@@ -259,79 +252,90 @@ class Partition():
             self.firstRun=False
             self.cutCost()
         
-                
-        # If user selects drawing circuit
-        if not quietMode:
-            #self.drawConns() #TODO: Only at the end
-            #self.drawTags() #TODO: Only at the end
-            #self.updatePlot() #TODO: What to plot
-            pass
+        startTimer = time.clock()
         
+               
+        self.totalCutCost = self.FMPartition(quietMode)
         
+        timeDif = time.clock() - startTimer
         
-#         for    a    small    number    of    passes    {    
-#             unlock    all    nodes    
-#             while    some    nodes    are    unlocked    {    
-#                 calculate    all    gains    
-#                 choose    node    with    highest    gain    whose        
-#                 movement    would    not    cause an imbalance    
-#                move    node    to    other    block    and    lock    it    
-#             }    
-#             choose    best    cut    seen    in    this    pass    
-#        }
+        print self.totalCutCost, " ",
+        print timeDif
 
-
-        
-        self.FMPartition()
-        
-        
-          
-        
-        
-        
-        
-    def FMPartition(self):
-        
-        i=1
-        
-        #TODO: For loop
-        
-        
-        difParts = -1
-
-        # While difference means the move will unbalance partitions        
-        while not (2>=difParts>=0):
-            moveNode = self.gainOrder[self.cells-i][1]
-            print "MAX ", moveNode
-            moveNodePart = self.G.node[moveNode]["part"]
             
-            if self.G.node[moveNode]["locked"]:
-                pass
-            #TODO: Is it locked?
         
-            if moveNodePart == 'A':
-                movePartSites = self.sitesA
-                tgtPartSites = self.sitesB
-                tgtPart = 'B'
-            else: 
-                movePartSites = self.sitesB
-                tgtPartSites = self.sitesA
-                tgtPart = 'A'
         
-            # Difference on the number of cells on each site
-            difParts = len(movePartSites)-len(tgtPartSites) #TODO: Change for incremental size for performance 
-            print difParts
-            i+=1
+    def FMPartition(self,quietMode):
         
-            
-        movePartSites.remove(moveNode)
-        tgtPartSites.append(moveNode)
-        self.G.node[moveNode]["part"] = tgtPart
-        print "WAS MOVED"
-        self.incrGain(moveNode)
+        bestCutCost = self.totalCutCost
+        
+        for loop in range(0,6):        
+            difParts = -1
+            i=1            
+            self.cntLocked = 0
+    
+    
+            while self.cntLocked<self.cells:
+                            
+                # While difference means the move will unbalance partitions        
+                while not (2>=difParts>=0):
+                                   
+                    moveNode = self.gainOrder[self.cells-i][1]
+                    moveNodePart = self.G.node[moveNode]["part"]
                     
+                    if self.G.node[moveNode]["locked"]:
+                        i+=1
+                        continue
+                                
+                    if moveNodePart == 'A':
+                        movePartSites = self.sitesA
+                        tgtPartSites = self.sitesB
+                        tgtPart = 'B'
+                    else: 
+                        movePartSites = self.sitesB
+                        tgtPartSites = self.sitesA
+                        tgtPart = 'A'
+                
+                    
+                    
+                    # Difference on the number of cells on each site
+                    difParts = len(movePartSites)-len(tgtPartSites) #TODO: Change for incremental size for performance 
+                    i+=1
+                
+                           
+                i=1
+                self.G.node[moveNode]["locked"]=True
+                self.cntLocked+=1
+                movePartSites.remove(moveNode)
+                tgtPartSites.append(moveNode)
+                self.G.node[moveNode]["part"] = tgtPart
+                self.incrGain(moveNode)
+                difParts = -1
+            
+                self.cutCost()
+                if not quietMode:
+                    self.axCost.set_title("Best Cost=" + str(bestCutCost))
+                    self.updatePlot(self.totalCutCost)
+                
+                # Store best result
+                if (self.totalCutCost<=bestCutCost):
+                    self.sitesABkp = self.sitesA
+                    self.sitesBBkp = self.sitesB
+                    self.gainOrderBkp = self.gainOrder
+                    self.GBkp = self.G
+                    bestCutCost=self.totalCutCost
+            
+            self.cntLocked=0
+            for node in self.G.nodes():
+                self.G.node[node]["locked"]=False
+            
+
+            self.sitesA = self.sitesABkp 
+            self.sitesB = self.sitesBBkp
+            self.gainOrder = self.gainOrderBkp
+            self.G = self.GBkp
         
-        
+        return bestCutCost
         
     def cutCost(self):
         
@@ -346,68 +350,13 @@ class Partition():
                     self.totalCutCost+=1
                     self.G.node[node]["cutCost"] = 1
                     break
-            
-            
-            
-                        
-        print "Initial cost ", self.totalCutCost    
+
 
 
     def cutIncrCost(self):
         pass #TODO:
            
-    def swapWinRand(self):
-        """ Select Random Cell and swap into Random Site  """
-        # Pick Random Cell so the move is always from an occupied to a free/occupied cell
-        randCell = random.randint(0,self.cells-1)
-        # Store Site of Cell to be swapped to use for Swap Back 
-        randCellSite = self.G.node[randCell]["site"].getIndex()
-                
-        # Pick random site near Cell
-        randX, randY = self.G.node[randCell]["site"].getBlockXY(self.rows,self.cols)
-        
-        siteX = randX + int(random.uniform(-self.winX,self.winX))
-        
-        siteY = randY + int(random.uniform(-self.winY,self.winY))
-        
-        if siteX<0:
-            siteX = 0
-        if siteX >= self.cols:
-            siteX = self.cols-1
-        if siteY < 0:
-            siteY = 0
-        if siteY >= self.rows:
-            siteY = self.rows-1
-                       
-        randSite = siteY*self.cols +siteX
-        # Do swap. Returns Cell of target Site to use for incremental cost or none if target was free
-        tgtSiteCell = self.swap(randCell,randSite)
-        
-        return randCell, randCellSite, tgtSiteCell
-    
-    def swap(self,swapCell,swapSite):
-        """ Swap Cell(occupying site) to given Target Site(could be free) """
-        
-        tgtSiteCell = None
-        # Target Site can be empty
-        if (self.sites[swapSite].isFree()):
-            # Free Cell value of Random Cell
-            self.G.node[swapCell]["site"].free()
-        else:
-            # Store Cell value of Target Site
-            tgtSiteCell = self.sites[swapSite].getCell()
-            # Write Cell value of Target Site into Swap Cell
-            self.G.node[swapCell]["site"].setCell(tgtSiteCell)
-            # Node of Target Site's Cell now points to Swap Cell's Site
-            self.G.node[tgtSiteCell]["site"] = self.G.node[swapCell]["site"]
-            
-        # Write Cell value of Swap Cell into Target Site 
-        self.sites[swapSite].setCell(swapCell)
-        # Node of Swap Cell now points to Target Site
-        self.G.node[swapCell]["site"] = self.sites[swapSite]
-        
-        return tgtSiteCell
-                 
+
     def updateDraw(self):
         """ Draw circuit Connections and Cell Tags """
         self.delConns()
@@ -425,27 +374,28 @@ class Partition():
         self.axCost.relim()
         self.axCost.autoscale_view()
         # Update plot
-        self.axCost.set_title("Cost=" + str(cost))
         self.canvasPlot.draw()
         self.canvasPlot.flush_events()
 
 
     def splitPlace(self):
         """ SPlit placement, for every node a Partition is assigned """
-        # Start placement on Partition A
-        partA = True
-        for node in self.G.nodes():
-                                   
-            if partA:
-                self.sitesA.append(node)
-                self.G.node[node]["part"] = 'A'
+        
+        
+        
+        nodeSortedIter = sorted(self.G.degree_iter(),key=itemgetter(1),reverse=True)
+        
+        placeCnt = 0
+        
+        for node in nodeSortedIter:
+            if placeCnt>self.cells/2:
+                self.sitesA.append(node[0])
+                self.G.node[node[0]]["part"] = 'A'
             else:
-                self.sitesB.append(node)
-                self.G.node[node]["part"] = 'B'
+                self.sitesB.append(node[0])
+                self.G.node[node[0]]["part"] = 'B'
+            placeCnt+=1
             
-            self.unlkStack.append(node)
-            # Toggle partition for next placement
-            partA = not partA
 
         
 
@@ -513,7 +463,6 @@ class Partition():
             # Get number of nodes connected on same and other partition
             movForce, retForce = self.nodeForces(node)
             nodeGain =  movForce-retForce
-            self.G.node[node]["gain"] = nodeGain #TODO: This one may not be necessary
 
             #Fill list of Nodes with gains
             self.gainOrder.append((nodeGain,node))
@@ -527,26 +476,14 @@ class Partition():
         movedNets = set([movedNode])
         movedNets.update(self.G.neighbors(movedNode))
         movedNets.update(self.G.node[movedNode]["nets"])
-        
-        
-        print "NOW REMOVE"
-        for node in self.gainOrder:
-            print node
-        
-        print movedNets
                 
         for movedNet in movedNets:
             movForce, retForce = self.nodeForces(movedNet)
             nodeGain =  movForce-retForce
-            self.G.node[movedNet]["gain"] = nodeGain #TODO: This one may not be necessary
             del self.gainOrder[self.keys.index(movedNet)]
             bisect.insort(self.gainOrder, (nodeGain,movedNet))
             self.keys = [r[1] for r in self.gainOrder]
-            
-            
-        print "NOW REMOVE"
-        for node in self.gainOrder:
-            print node
+
             
     def nodeForces(self,node):
         
@@ -571,75 +508,8 @@ class Partition():
 
         return movForce, retForce
     
-    def cost(self):
-        """ Seeing the circuit as a matrix the distance units between sites can be found as the difference
-        between their axis locations. 
-        
-        A=(0,0)    B=(3,0)    C=(0,3)
-        
-           v...........v
-        >| A |   |   | B |    Cell Sites Row
-        :#################    Routing Channel
-        :|   |   |   |   |    Cell Sites Row
-        :#################    Routing Channel
-        :|   |   |   |   |    Cell Sites Row
-        :#################    Routing Channel
-        >| C |   |   |   |    Cell Sites Row
-        
-        Note:
-            Y Distance between the center of A and C accounting for the Routing Channels
-            DistY = (CX-AY)*2
-        
-        """
-        # Accumulator for total Cost of half-perimeter of bounding box for all nets
-        self.totalCost = 0
-        for node in self.G.nodes():
-            # Update Cost of net
-            bbCost = self.boundBoxCost(node)
-            self.G.node[node]["cost"] = bbCost
-            # Accumulate cost as Half Perimeter of Bounding Box for every Net
-            self.totalCost += bbCost
-    
-    def incrCost(self,swapCell,swapTgtCell):
-        """ Incremental Cost function. From Cells inputs modify total cost by 
-            subtracting the cost of the nets connected to those cells, recalculating
-            the cost of said Net and adding it to the total"""
-        # Find Nets modified by swap. "nets" stores Net source nodes        
-        swapNets = set(self.G.node[swapCell]["nets"])
-        # Add nets from target to set
-        if swapTgtCell:
-            swapNets.update(self.G.node[swapTgtCell]["nets"])
-                   
-        for node in swapNets:
-            # Decrement Total Cost by Cost of changed net
-            self.totalCost -= self.G.node[node]["cost"]
-            # Assign new Cost to net cost value
-            self.G.node[node]["cost"] = self.boundBoxCost(node)
-            # Increment Total Cost by Cost of changed net
-            self.totalCost += self.G.node[node]["cost"]
-        
-    def boundBoxCost(self,node):
-        """ Get Half Perimeter of Net of input Node """
-        # Initialize bounding box points on net source
-        srcX,srcY = self.G.node[node]["site"].getBlockXY(self.cols,self.rows)
-        minX, maxX = srcX, srcX
-        minY, maxY = srcY, srcY
-        
-        # Find bounding box with min and max for X and Y
-        for nb in self.G.neighbors(node):
-            nbX,nbY = self.G.node[nb]["site"].getBlockXY(self.cols,self.rows)
-            if (nbX>maxX):
-                maxX=nbX
-            elif(nbX<minX):
-                minX=nbX
-            if(nbY>maxY):
-                maxY=nbY
-            elif(nbY<minY):
-                minY=nbY
-        
-        # Return Half-Perimeter of Bounding Box
-        return (maxX-minX) + ((maxY-minY)*2)
-    
+
+       
     def quitApp(self):
         """ Exit """
         self.master.destroy()
@@ -653,7 +523,6 @@ def main(argv):
     # Default Values
     inputfile = None
     quietMode = False
-    temperature = 1
     seed = 30
     
     
@@ -665,13 +534,12 @@ def main(argv):
     
     for opt, arg in opts:
         if opt == '-h':
-            print 'test.py -i <inputfile> [-q] [-t <Temperature>] [-s <Seed>]'
+            print 'test.py -i <inputfile> [-q] [-s <Seed>]'
             print "-q : Quiet Mode"
             print "-t <Temperature>: Initial temperature for SA"
             sys.exit()
         elif opt in ("-i", "--ifile"):
             inputfile = arg
-            print "Read file " + inputfile
         elif opt == '-s':
             seed = int(arg)
         elif opt == "-q":
@@ -681,8 +549,8 @@ def main(argv):
         print 'test.py -i <inputfile>'
         sys.exit(2)
     
-    partition = Partition(root,temperature,seed,inputfile,quietMode)
-    root.wm_title("SA Placement Tool. EECE583: Jose Pinilla")
+    partition = Partition(root,seed,inputfile,quietMode)
+    root.wm_title("FM Partitioning Tool. EECE583: Jose Pinilla")
     root.protocol('WM_DELETE_WINDOW', partition.quitApp)
     root.resizable(False, False)
     root.mainloop()
