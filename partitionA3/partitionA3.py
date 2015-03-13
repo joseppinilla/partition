@@ -42,6 +42,10 @@ class Partition():
         self.sitesB = []
         self.blocksB = []
         
+        
+        self.sitesABkp = []
+        self.sitesBBkp = []
+        
         # List of Nodes sorted by gains
         self.gainOrder = []
         
@@ -83,8 +87,6 @@ class Partition():
         self.G.add_nodes_from(range(0,self.cells))
         for node in self.G.nodes():
             self.G.node[node]["nets"]=[]
-            self.G.node[node]["cost"]=0
-            self.G.node[node]["cutCost"]=0
             self.G.node[node]["locked"]=False
             
         # For every Net, add edges between corresponding nodes
@@ -277,9 +279,9 @@ class Partition():
     
             while self.cntLocked<self.cells:
                             
-                # While difference means the move will unbalance partitions        
+                # While difference between 2 and 0. Means the move will not unbalance partitions        
                 while not (2>=difParts>=0):
-                                   
+
                     moveNode = self.gainOrder[self.cells-i][1]
                     moveNodePart = self.G.node[moveNode]["part"]
                     
@@ -319,21 +321,28 @@ class Partition():
                 
                 # Store best result
                 if (self.totalCutCost<=bestCutCost):
-                    self.sitesABkp = self.sitesA
-                    self.sitesBBkp = self.sitesB
-                    self.gainOrderBkp = self.gainOrder
-                    self.GBkp = self.G
+                    if (self.totalCutCost==bestCutCost):
+                        if (random.random() < 0.8):											
+                            continue
+                        
+                    self.sitesABkp = list(self.sitesA)
+                    self.sitesBBkp = list(self.sitesB)
+                    self.gainOrderBkp = list(self.gainOrder)
+                    self.GBkp = self.G.copy()
                     bestCutCost=self.totalCutCost
             
             self.cntLocked=0
+            
+            self.sitesA = list(self.sitesABkp) 
+            self.sitesB = list(self.sitesBBkp)
+            self.gainOrder = list(self.gainOrderBkp)
+            self.keys = [r[1] for r in self.gainOrder]
+            self.G = self.GBkp.copy()
+            
             for node in self.G.nodes():
                 self.G.node[node]["locked"]=False
+        
             
-
-            self.sitesA = self.sitesABkp 
-            self.sitesB = self.sitesBBkp
-            self.gainOrder = self.gainOrderBkp
-            self.G = self.GBkp
         
         return bestCutCost
         
@@ -348,7 +357,6 @@ class Partition():
             for nb in self.G.neighbors(node):
                 if self.G.node[nb]["part"]!=nodePart:
                     self.totalCutCost+=1
-                    self.G.node[node]["cutCost"] = 1
                     break
 
 
@@ -388,15 +396,13 @@ class Partition():
         placeCnt = 0
         
         for node in nodeSortedIter:
-            if placeCnt>self.cells/2:
+            if placeCnt<self.cells/2:
                 self.sitesA.append(node[0])
                 self.G.node[node[0]]["part"] = 'A'
             else:
                 self.sitesB.append(node[0])
                 self.G.node[node[0]]["part"] = 'B'
             placeCnt+=1
-            
-
         
 
     def randPlace(self):
@@ -494,7 +500,7 @@ class Partition():
         
         for nb in set(self.G.neighbors(node)):
             if nodePart != self.G.node[nb]["part"]:
-                movForce+=1
+                movForce+=3
             else:
                 retForce+=1
 
@@ -502,7 +508,7 @@ class Partition():
                
         for connNode in connNodes:           
             if nodePart != self.G.node[connNode]["part"]:
-                movForce+=1
+                movForce+=3
             else:
                 retForce+=1
 
